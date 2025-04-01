@@ -3,9 +3,16 @@ import threading
 import discord
 from discord.ext import commands
 import datetime
-import server  # Import the Flask web server
 
-# Load Discord bot token from environment variable
+# Ensure server.py is found correctly
+try:
+    import server  # Import the Flask web server
+except ModuleNotFoundError:
+    import sys
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # Add current directory to path
+    import server  # Retry importing server.py
+
+# Load Discord bot token from environment variables
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 # Set up bot intents
