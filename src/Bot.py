@@ -1,128 +1,77 @@
 import os
+import threading
 import discord
 from discord.ext import commands
+from discord import app_commands
+from discord.ui import View, Button
 from pymongo import MongoClient
-import datetime
-
-# Load environment variables (e.g., MongoDB URI)
 from dotenv import load_dotenv
-load_dotenv()
+import server  # Import Flask server
 
-# MongoDB connection setup
+load_dotenv()  # Load environment variables
+
+# Start Flask web server in a background thread
+threading.Thread(target=server.run, daemon=True).start()
+
+# Connect to MongoDB
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["key_system"]
-hwid_collection = db["hwids"]
 keys_collection = db["keys"]
+hwid_collection = db["hwids"]
 
-# Set up Discord bot
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+# Create bot instance
 intents = discord.Intents.default()
-intents.message_content = True  # Needed for message handling
-
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# Cooldown dictionary for key requests
-user_cooldowns = {}
+# Embed with buttons
+class KeyRedemptionView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-# Function to load keys from the keys.txt file
-def load_keys():
-    if not os.path.exists('keys.txt'):
-        return []  # Return empty list if no file found
-    with open('keys.txt', 'r') as file:
-        return [line.strip() for line in file.readlines() if line.strip()]
+    @discord.ui.button(label="Redeem Key", style=discord.ButtonStyle.green)
+    async def redeem_key(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("Enter your key:", ephemeral=True)
 
-# Function to save keys back to the keys.txt file (after redemption)
-def save_keys(keys):
-    with open('keys.txt', 'w') as file:
-        file.write('\n'.join(keys))
+        def check(msg):
+            return msg.author == interaction.user and msg.channel == interaction.channel
 
-# Function to move used key to the `used.txt` file
-def move_key_to_used(key):
-    with open('used.txt', 'a') as file:
-        file.write(f"{key}\n")
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=30)
+            key = msg.content.strip()
 
-# Command to redeem a key and set HWID
-@bot.command()
-async def redeem_key(ctx, key: str):
-    """Redeem a key and associate it with a HWID"""
-    user_id = ctx.author.id
-    hwid = "HWID-123456789"  # This should be fetched from the user (replace with actual method)
+            key_data = keys_collection.find_one({"key": key})
+            if not key_data:
+                await interaction.followup.send("Invalid key!", ephemeral=True)
+                return
 
-    # Load keys from the file
-    keys = load_keys()
+            keys_collection.delete_one({"key": key})  # Remove key from DB
+            hwid_collection.insert_one({"user_id": interaction.user.id, "hwid": "None"})
 
-    # Check if the key exists
-    if key not in keys:
-        await ctx.send("Invalid key!")
-        return
+            await interaction.followup.send(f"Key `{key}` redeemed! You can now set your HWID.", ephemeral=True)
+        except:
+            await interaction.followup.send("Time expired. Please try again.", ephemeral=True)
 
-    # Check if the key has been used already and is linked with a different HWID
-    key_data = keys_collection.find_one({"key": key})
+    @discord.ui.button(label="Reset HWID", style=discord.ButtonStyle.blurple)
+    async def reset_hwid(self, interaction: discord.Interaction, button: Button):
+        hwid_collection.update_one(
+            {"user_id": interaction.user.id},
+            {"$set": {"hwid": "None"}},
+            upsert=True
+        )
+        await interaction.response.send_message("HWID has been reset!", ephemeral=True)
 
-    if key_data and key_data["hwid"] != "None" and key_data["hwid"] != hwid:
-        await ctx.send("This key has already been used on a different HWID. You cannot use it.")
-        return
-
-    # Redeem the key and set HWID in MongoDB
-    keys.remove(key)
-    move_key_to_used(key)  # Log the used key
-
-    # Update the MongoDB to store HWID for the key
-    keys_collection.update_one(
-        {"key": key},
-        {"$set": {"user_id": user_id, "hwid": hwid}},
-        upsert=True
-    )
-
-    # Save remaining keys back to the file
-    save_keys(keys)
-
-    await ctx.send(f"Key `{key}` redeemed successfully with HWID `{hwid}`!")
-
-# Command to reset HWID
-@bot.command()
-async def reset_hwid(ctx):
-    """Reset the user's HWID"""
-    user_id = ctx.author.id
-    hwid_collection.update_one(
-        {"user_id": user_id},
-        {"$set": {"hwid": "None"}},
-        upsert=True
-    )
-    await ctx.send("Your HWID has been reset.")
-
-# Command to view current HWID status
-@bot.command()
-async def view_hwid(ctx):
-    """View current HWID status"""
-    user_id = ctx.author.id
-    user_hwid = hwid_collection.find_one({"user_id": user_id})
-
-    if user_hwid:
-        await ctx.send(f"Your HWID is currently: {user_hwid['hwid']}")
-    else:
-        await ctx.send("Your HWID has not been set.")
-
-# Command to check available keys (for admin use)
-@bot.command()
-async def show_keys(ctx):
-    """Show all available keys"""
-    keys = load_keys()
-    if not keys:
-        await ctx.send("No keys available.")
-    else:
-        await ctx.send(f"Available keys: {', '.join(keys)}")
-
-# Event: Bot is ready
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user}')
-    try:
-        synced = await bot.tree.sync()  # Sync slash commands
-        print(f"Synced {len(synced)} commands!")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+    print(f"Logged in as {bot.user}")
 
-# Run the bot
-bot.run(TOKEN)
+@bot.command()
+async def panel(ctx):
+    embed = discord.Embed(
+        title="Key Redemption & HWID Reset",
+        description="Use the buttons below to redeem your key or reset HWID.",
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed, view=KeyRedemptionView())
+
+bot.run(os.getenv("DISCORD_BOT_TOKEN"))
