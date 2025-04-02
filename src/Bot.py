@@ -47,6 +47,8 @@ def move_key_to_used(key):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
+
+    # Sync app commands (slash commands)
     try:
         synced = await bot.tree.sync()  # Sync slash commands
         print(f"Synced {len(synced)} commands!")
