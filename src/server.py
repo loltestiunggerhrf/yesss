@@ -9,7 +9,8 @@ bot = commands.Bot(command_prefix='/')
 
 @app.route('/')
 def index():
-    return "Bot is running!"
+    return "If you are here you are gay"  # This will show when the page is accessed
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)  # Make sure the port is open, change if necessary
+
